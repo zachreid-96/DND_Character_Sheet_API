@@ -1,0 +1,36 @@
+from Condensed_Loader import Loader
+
+
+class Spell:
+
+    def __init__(self, spell):
+        self.name = spell["fields"]["name"]
+        self.desc = spell["fields"]["desc"]
+        self.document = spell["fields"]["document"]
+        self.level = spell["fields"]["level"]
+        self.school = spell["fields"]["school"]
+        self.higher_level = spell["fields"]["higher_level"]
+        self.target_type = spell["fields"]["target_type"]
+        self.range_text = spell["fields"]["range_text"]
+        self.range = spell["fields"]["range"]
+        self.range_unit = spell["fields"]["range_unit"]
+        self.ritual = spell["fields"]["ritual"]
+        self.casting_time = spell["fields"]["casting_time"]
+        self.reaction_condition = spell["fields"]["reaction_condition"]
+        self.verbal = spell["fields"]["verbal"]
+        self.somatic = spell["fields"]["somatic"]
+        self.material = spell["fields"]["material"]
+        self.materials_needed = spell["fields"]["material_specified"]
+        self.materials_cost = spell["fields"]["material_cost"]
+        self.materials_consumed = spell["fields"]["material_consumed"]
+        self.target_count = spell["fields"]["target_count"]
+        self.saving_throw_ability = spell["fields"]["saving_throw_ability"]
+        self.attack_roll = spell["fields"]["attack_roll"]
+        self.damage_roll = spell["fields"]["damage_roll"]
+        self.damage_types = spell["fields"]["damage_types"]
+        self.duration = spell["fields"]["duration"]
+        self.shape_type = spell["fields"]["shape_type"]
+        self.shape_size = spell["fields"]["shape_size"]
+        self.shape_size_unit = spell["fields"]["shape_size_unit"]
+        self.concentration = spell["fields"]["concentration"]
+        self.classes = spell["fields"]["Classes_2014"]

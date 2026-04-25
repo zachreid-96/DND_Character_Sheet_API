@@ -1,0 +1,56 @@
+[
+{
+  "model": "api_v2.itemrarity",
+  "pk": "artifact",
+  "fields": {
+    "name": "Artifact",
+    "document": "srd-2014",
+    "rank": 6
+  }
+},
+{
+  "model": "api_v2.itemrarity",
+  "pk": "common",
+  "fields": {
+    "name": "Common",
+    "document": "srd-2014",
+    "rank": 1
+  }
+},
+{
+  "model": "api_v2.itemrarity",
+  "pk": "legendary",
+  "fields": {
+    "name": "Legendary",
+    "document": "srd-2014",
+    "rank": 5
+  }
+},
+{
+  "model": "api_v2.itemrarity",
+  "pk": "rare",
+  "fields": {
+    "name": "Rare",
+    "document": "srd-2014",
+    "rank": 3
+  }
+},
+{
+  "model": "api_v2.itemrarity",
+  "pk": "uncommon",
+  "fields": {
+    "name": "Uncommon",
+    "document": "srd-2014",
+    "rank": 2
+  }
+},
+{
+  "model": "api_v2.itemrarity",
+  "pk": "very-rare",
+  "fields": {
+    "name": "Very Rare",
+    "document": "srd-2014",
+    "rank": 4
+  }
+}
+]
