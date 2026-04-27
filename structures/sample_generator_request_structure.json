@@ -1,0 +1,19 @@
+{
+  "headers": {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer xxx"
+  },
+  "body": {
+    "Edition": "",
+    "Class": "Bard",
+    "Level": 15,
+    "Quantity": 0,
+    "Race": "",
+    "Spells": [],
+    "Feats": [],
+    "Armor": [],
+    "Shield": [],
+    "Weapons": [],
+    "Cantrips": []
+  }
+}

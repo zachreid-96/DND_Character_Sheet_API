@@ -1,0 +1,10 @@
+{
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "body": {
+    "grant_type": "query_access",
+    "username": "user",
+    "password": "passphrase"
+  }
+}

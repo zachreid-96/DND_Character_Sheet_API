@@ -53,10 +53,7 @@ Four endpoints are implemented and functioning. Full request structure, response
 ## Nginx Configuration
 
 The following nginx configuration sits in front of the Flask application. The auth check at this layer filters requests before they reach Gunicorn.
-
-```nginx
-# Placeholder — configuration to be included on first release
-```
+Please see `/config/dnd_api.conf` for a sample Nginx configuration server block.
 
 ---
 
