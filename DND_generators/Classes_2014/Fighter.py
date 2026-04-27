@@ -102,15 +102,16 @@ class Fighter2014:
         self.armor_class = 10 + self.dexterity_modifier + self.ac_bonus
 
         if level == 1:
-            self.get_starting_equipment()
+            self._get_starting_equipment()
         else:
-            self.level_up_wrapper(level)
+            self._get_starting_equipment()
+            self._level_up_wrapper(level)
 
-        self.get_attack_damage_bonus()
+        self._get_attack_damage_bonus()
 
         return
 
-    def get_attack_damage_bonus(self):
+    def _get_attack_damage_bonus(self):
 
         for weapon in self.weapons:
             key = list(weapon.keys())[0]
@@ -133,7 +134,7 @@ class Fighter2014:
 
         return
 
-    def get_starting_equipment(self):
+    def _get_starting_equipment(self):
         self.loader.load_armor()
         self.loader.load_weapons()
 
@@ -198,9 +199,9 @@ class Fighter2014:
         self.weapons = best_weapon
         self.weapons.append({"Light Crossbow": self.loader.item_weapons["Simple Ranged Weapons"]["Light Crossbow"]})
 
-        self.get_attack_damage_bonus()
+        self._get_attack_damage_bonus()
 
-    def get_best_armor(self, use_shield, stealth=True):
+    def _get_best_armor(self, use_shield, stealth=True):
 
         self.loader.load_armor()
 
@@ -267,7 +268,7 @@ class Fighter2014:
                     self.shield = best_shield
                     self.armor_class += best_shield_ac
 
-    def get_best_weapon(self, use_shield):
+    def _get_best_weapon(self, use_shield):
 
         self.loader.load_weapons()
 
@@ -399,14 +400,14 @@ class Fighter2014:
 
         self.armor_class = 10 + self.dexterity_modifier + self.ac_bonus
 
-        self.get_best_armor(use_shield=True, stealth=False)
-        self.get_best_weapon(use_shield=True)
+        self._get_best_armor(use_shield=True, stealth=False)
+        self._get_best_weapon(use_shield=True)
 
-        self.get_attack_damage_bonus()
+        self._get_attack_damage_bonus()
 
         return
 
-    def level_up_wrapper(self, levels: int):
+    def _level_up_wrapper(self, levels: int):
 
         if levels <= 1:
             return

@@ -59,7 +59,7 @@ def _format_response_error(status: int, reasons: list[str]) -> dict:
     return response
 
 def _format_token_response(status: int, token: str, current_time: datetime) -> dict:
-    expiration_time = datetime.strftime(current_time + timedelta(minutes=60), "%Y-%m-%d %H:%M:%S")
+    expiration_time = datetime.strftime(current_time + timedelta(minutes=60), "%Y-%m-%d %H:%M:%S.%f")
     response = {
         "data": {
             "code": status,
@@ -292,8 +292,6 @@ def _query_token_time(token: str):
     except sqlite3.Error:
         raise RuntimeError("Database connection error")
 
-    return None
-
 def _query_full_user(username: str):
     database_name = "api_hammer.db"
     try:
@@ -371,22 +369,53 @@ def _validate_token(token: str) -> tuple[int, str]:
 
     return 200, ""
 
+def _refresh_token_time(token: str):
+    database_name = "api_hammer.db"
+
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+
+    try:
+        connection = sqlite3.connect(database_name)
+        cursor = connection.cursor()
+
+        cursor.execute("""
+                INSERT INTO users (api_token, api_token_last_used)
+                VALUES (?, ?)
+                ON CONFLICT (api_token) DO UPDATE SET
+                    api_token_last_used = COALESCE(EXCLUDED.api_token_last_used, users.api_token_last_used)
+            """, (token, current_time))
+
+        connection.commit()
+        cursor.close()
+        connection.close()
+
+    except sqlite3.Error:
+        raise RuntimeError("Database connection error")
+
+
 def _validate_request() -> tuple[int, str]:
     headers = request.headers
     body = request.get_json() or {}
     path = request.path
 
-    if path == r"/get-token" and any(not val for val in body.values()):
-        return 401, ""
+    required_body_keys = {"grant_type", "username", "password"}
+
+    if path == r"/get-token":
+        if set(body.keys()) != required_body_keys:
+            return 401, ""
+        if any(not body[field] for field in required_body_keys):
+            return 401, ""
     elif path != r"/get-token":
         auth = headers.get("Authorization", None)
         if not auth:
             return 401, ""
 
-        auth_token = auth.strip("Bearer ")
+        auth_token = auth.removeprefix("Bearer ")
         status, reason = _validate_token(auth_token)
         if status != 200:
             return status, reason
+
+        _refresh_token_time(auth_token)
 
     return 200, ""
 
@@ -499,7 +528,7 @@ def get_token():
 
     if api_token_creation:
         time_difference = current_time - datetime.strptime(api_token_creation, "%Y-%m-%d %H:%M:%S.%f")
-        if time_difference < timedelta(hours=24):
+        if time_difference > timedelta(hours=24):
             return jsonify(_format_response_error(403, ["Token Expired"])), 403
 
     token = _generate_token(user_id, passed_username, passed_grant_type, current_time)

@@ -129,6 +129,7 @@ class Bard2014:
         if level == 1:
             self.get_starting_equipment()
         else:
+            self.get_starting_equipment()
             self.level_up_wrapper(level)
 
         self.get_attack_damage_bonus()
