@@ -33,6 +33,7 @@ from DND_generators.Classes_2024.Warlock import Warlock2024
 from DND_generators.Classes_2024.Wizard import Wizard2024
 
 app = Flask(__name__)
+AppLogging.setup_logger(name="dnd_api", dir_log="dnd_log", file_level="INFO", console_level="CRITICAL")
 
 def _format_response_character(characters: list[dict]) -> dict:
 
