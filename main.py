@@ -1,5 +1,6 @@
 import sqlite3, hashlib, os, secrets, bcrypt, inspect
 
+from pathlib import Path
 from AppLogging import AppLogging
 from random import randint, choice
 from datetime import datetime, timedelta
@@ -33,7 +34,7 @@ from DND_generators.Classes_2024.Warlock import Warlock2024
 from DND_generators.Classes_2024.Wizard import Wizard2024
 
 app = Flask(__name__)
-AppLogging.setup_logger(name="dnd_api", dir_log="dnd_log", file_level="INFO", console_level="CRITICAL")
+AppLogging.setup_logger(name="dnd_api", dir_log=Path(r"/var/log/dnd-api/"), file_level="INFO", console_level="CRITICAL")
 
 def _format_response_character(characters: list[dict]) -> dict:
 
@@ -579,5 +580,5 @@ def get_token() -> tuple[Response, int]:
 
 if __name__ == '__main__':
     load_dotenv(find_dotenv())
-    AppLogging.setup_logger(name="dnd_api", dir_log="dnd_log", file_level="INFO", console_level="CRITICAL")
+    AppLogging.setup_logger(name="dnd_api", dir_log=Path(r"/var/log/dnd-api/"), file_level="INFO", console_level="CRITICAL")
     app.run()
