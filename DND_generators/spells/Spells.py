@@ -1,4 +1,4 @@
-from Condensed_Loader import Loader
+from ..Condensed_Loader import Loader
 
 
 class Spell:
