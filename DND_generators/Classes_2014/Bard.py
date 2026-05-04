@@ -598,3 +598,31 @@ class Bard2014:
 
         for spell in self.spells:
             print(f"\t{spell}")
+
+    def dict_output(self):
+
+        output = {
+            "Level": self.level,
+            "Class": self.name,
+            "AC": self.armor_class,
+            "HP": self.hit_points,
+            "Stats": {
+                "STR": f"{self.strength} ({self.strength_modifier:+>2})",
+                "DEX": f"{self.dexterity} ({self.dexterity_modifier:+>2})",
+                "CON": f"{self.constitution} ({self.constitution_modifier:+>2})",
+                "INT": f"{self.intelligence} ({self.intelligence_modifier:+>2})",
+                "WIS": f"{self.wisdom} ({self.wisdom_modifier:+>2})",
+                "CHA": f"{self.charisma} ({self.charisma_modifier:+>2})"
+            },
+            "Attacks": self.attacks,
+            "Proficiency Bonus": self.proficiency_bonus,
+            "Attack Bonus": self.attack_bonus,
+            "Damage Bonus": self.damage_bonus,
+            "Shield": self.shield,
+            "Armor": self.armor,
+            "Weapons": self.weapons,
+            "Cantrips": self.cantrips,
+            "Spells": self.spells,
+        }
+
+        return output
