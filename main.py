@@ -1,11 +1,13 @@
-import sqlite3, hashlib, os, secrets, bcrypt, inspect
+import sqlite3, hashlib, os, secrets, bcrypt, inspect, redis
 
 from pathlib import Path
 from AppLogging import AppLogging
 from random import randint, choice
 from datetime import datetime, timedelta
-from flask import Flask, request, jsonify, abort, Response
+from flask import Flask, request, jsonify, abort, Response, make_response, render_template
 from dotenv import load_dotenv, find_dotenv
+from flask_limiter import Limiter, RequestLimit
+from flask_limiter.util import get_remote_address
 
 from DND_generators.Classes_2014.Barbarian import Barbarian2014
 from DND_generators.Classes_2014.Bard import Bard2014
@@ -33,8 +35,41 @@ from DND_generators.Classes_2024.Sorcerer import Sorcerer2024
 from DND_generators.Classes_2024.Warlock import Warlock2024
 from DND_generators.Classes_2024.Wizard import Wizard2024
 
+load_dotenv(find_dotenv())
+dnd_log_path = os.getenv("DND_LOG_PATH")
+AppLogging.setup_logger(name="dnd_api", dir_log=Path(dnd_log_path), file_level="INFO", console_level="CRITICAL")
 app = Flask(__name__)
-AppLogging.setup_logger(name="dnd_api", dir_log=Path(r"/var/log/dnd-api/"), file_level="INFO", console_level="CRITICAL")
+
+redis_port = int(os.getenv("REDIS_PORT"))
+redis_host = os.getenv("REDIS_HOST")
+
+def _default_limit_exceeded(request_limit: RequestLimit):
+    return make_response(
+        render_template("my_ratelimit_template.tmpl", request_limit=request_limit),
+        429
+    )
+
+def _get_dynamic_rate_limit():
+    if request.headers.get("Authorization", None):
+        return "6 per second"
+    return "3 per second"
+
+def _get_dynamic_key_func():
+    _token = request.headers.get("Authorization", None)
+    if _token:
+        return _token.removeprefix("Bearer ")
+    return get_remote_address()
+
+limiter = Limiter(
+    key_func=_get_dynamic_key_func,
+    app=app,
+    storage_uri=f"redis://{redis_host}:{redis_port}",
+    default_limits=[_get_dynamic_rate_limit],
+    on_breach=_default_limit_exceeded
+)
+
+redis_cache = redis.Redis(host=redis_host, port=redis_port, decode_responses=True)
+
 
 def _format_response_character(characters: list[dict]) -> dict:
 
@@ -265,8 +300,9 @@ def _create_table() -> None:
         cursor.execute("""
             CREATE TABLE users (
                 user_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT,
-                password TEXT,
+                user_name TEXT,
+                user_email TEXT,
+                user_project TEXT,
                 api_token TEXT NULL,
                 api_token_creation DATETIME NULL,
                 api_token_last_used DATETIME NULL
@@ -318,6 +354,29 @@ def _query_full_user(username: str) -> tuple[int, bytes, str, str, str] | None:
             FROM users
             WHERE username = ?
         """, (username,))
+        user_details = cursor.fetchone()
+
+        connection.commit()
+        cursor.close()
+        connection.close()
+
+        return user_details
+    except sqlite3.Error:
+        logger.error("Unable to query full user")
+        raise RuntimeError("Database connection error")
+
+def _query_full_user_redis(token: str) -> tuple[int, str, str, str, str, str, str] | None:
+    database_name = os.getenv("DB_PATH")
+    logger = AppLogging.get_logger(name=f"{inspect.currentframe().f_code.co_name}")
+    try:
+        connection = sqlite3.connect(database_name)
+        cursor = connection.cursor()
+
+        cursor.execute("""
+                SELECT user_id, user_name, user_email, user_project, api_token, api_token_creation, api_token_last_expired 
+                FROM users
+                WHERE api_token = ?
+            """, (token,))
         user_details = cursor.fetchone()
 
         connection.commit()
@@ -412,6 +471,16 @@ def _refresh_token_time(token: str) -> None:
         logger.error("Unable to refresh token")
         raise RuntimeError("Database connection error")
 
+def _set_redis_cache_values(token: str) -> None:
+    try:
+        _, _, _, _, api_token, api_token_creation, api_token_last_used = _query_full_user_redis(token)
+        redis_cache.hset(f'user-session:{api_token}', mapping={
+            "api_token": api_token,
+            "api_token_creation": api_token_creation,
+            "api_token_last_used": api_token_last_used
+        })
+    except Exception:
+        redis_cache.hset('user-session:None', mapping={})
 
 def _validate_request() -> tuple[int, str]:
     headers = request.headers
@@ -430,6 +499,13 @@ def _validate_request() -> tuple[int, str]:
             return 401, ""
     elif path != r"/get-token":
         auth = headers.get("Authorization", None)
+
+        cached_info = redis_cache.hgetall(auth)
+        if cached_info:
+            return 200, ""
+        else:
+            _set_redis_cache_values(auth)
+
         if not auth:
             logger.error("Authorization header is missing")
             return 401, ""
