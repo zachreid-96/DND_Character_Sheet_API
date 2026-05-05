@@ -65,7 +65,7 @@ Please see `/config/dnd_api.conf` for a sample Nginx configuration server block.
 
 ## Related Projects
 
-- **Concurrent Client** — The intended consumer of this API. Dispatches up to 50 concurrent threads, ingests the character sheet payload from each response, and loads aggregated results into PostgreSQL. *(Repository link to be added)*
+- **Concurrent Client** — The intended consumer of this API. Dispatches up to 4 concurrent threads, ingests the character sheet payload from each response, and loads aggregated results into PostgreSQL. *(Repository link to be added)*
 - **D&D Encounter Balancer** — The permanent home of the character sheet generation logic once this showcase is complete. *(Repository link to be added)*
 
 ---
