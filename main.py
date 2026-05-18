@@ -1,4 +1,4 @@
-import sqlite3, hashlib, os, secrets, bcrypt, inspect, redis
+import os, inspect, redis
 
 from pathlib import Path
 from AppLogging import AppLogging
@@ -34,6 +34,8 @@ from DND_generators.Classes_2024.Rogue import Rogue2024
 from DND_generators.Classes_2024.Sorcerer import Sorcerer2024
 from DND_generators.Classes_2024.Warlock import Warlock2024
 from DND_generators.Classes_2024.Wizard import Wizard2024
+
+from database_ops.database_helper import query_full_user_redis, write_session_expiration, get_redis_mapping
 
 load_dotenv(find_dotenv())
 dnd_log_path = os.getenv("DND_LOG_PATH")
@@ -71,12 +73,17 @@ limiter = Limiter(
 redis_cache = redis.Redis(host=redis_host, port=redis_port, decode_responses=True)
 
 
-def _format_response_character(characters: list[dict]) -> dict:
+def _format_response_character(characters: list[dict], body: dict) -> dict:
+
+    campaign_name = body.get("campaign_name", "").strip()
+    region = body.get("region", "").strip()
 
     response = {
         "data": {
             "code": 200,
-            "characters": characters
+            "characters": characters,
+            "campaign_name": campaign_name,
+            "region": region
         },
         "message": f"Generated {len(characters)} characters",
         "status": "success"
@@ -95,20 +102,7 @@ def _format_response_error(status: int, reasons: list[str]) -> dict:
     }
     return response
 
-def _format_token_response(status: int, token: str, current_time: datetime) -> dict:
-    expiration_time = datetime.strftime(current_time + timedelta(minutes=60), "%Y-%m-%d %H:%M:%S.%f")
-    response = {
-        "data": {
-            "code": status,
-            "token": token,
-            "expires": expiration_time
-        },
-        "message": "Issued Authorization token.",
-        "status": "success"
-    }
-    return response
-
-def _validate_body(body: dict) -> tuple[int, list[str], tuple[str, str, int, int]]:
+def _validate_body(body: dict, route: str) -> tuple[int, list[str], tuple[str, str, int, int]]:
 
     status = 200
     reasons = []
@@ -127,10 +121,10 @@ def _validate_body(body: dict) -> tuple[int, list[str], tuple[str, str, int, int
     # dnd_weapons = body.get("Weapons", None)
     # dnd_cantrips = body.get("Cantrips", None)
 
-    accepted_editions = ["5e", "5.5e"]
+    accepted_editions = ["5e", "5.5e", "random"]
 
     accepted_classnames = [
-        "Barbarian", "Bard", "Cleric", "Druid", "Fighter", "Monk", "Paladin", "Ranger", "Rogue", "Sorcerer", "Warlock", "Wizard"
+        "Barbarian", "Bard", "Cleric", "Druid", "Fighter", "Monk", "Paladin", "Ranger", "Rogue", "Sorcerer", "Warlock", "Wizard", "random"
     ]
 
     if dnd_edition not in accepted_editions:
@@ -138,6 +132,15 @@ def _validate_body(body: dict) -> tuple[int, list[str], tuple[str, str, int, int
 
     if dnd_class not in accepted_classnames:
         reasons.append(f"Class '{dnd_class}' is not an accepted SRD Class.")
+
+    if dnd_edition == "5e" and route == "/generator-2024":
+        reasons.append(f"Edition '{dnd_edition}' and route '{route}' are mismatched")
+
+    if dnd_edition == "5.5e" and route == "/generator-2014":
+        reasons.append(f"Edition '{dnd_edition}' and route '{route}' are mismatched")
+
+    if dnd_edition == "random" and route != "/generator-random":
+        reasons.append(f"Edition '{dnd_edition}' and route '{route}' are mismatched")
 
     try:
         dnd_level = int(dnd_level)
@@ -277,245 +280,132 @@ def _build_characters(character_stats: tuple) -> list[dict]:
 
     return characters
 
-def _create_database() -> None:
-    database_name = os.getenv("DB_PATH")
+def _set_redis_cache_values(token: str) -> None:
+    m, n, t = get_redis_mapping(token)
+    redis_cache.hset(name=n, mapping=m)
+    redis_cache.expire(name=n, time=t)
+
+def _handle_redis_cache_creation(auth_token: str, required_body_1: str, required_body_2: str) -> tuple[int, str]:
+
     logger = AppLogging.get_logger(name=f"{inspect.currentframe().f_code.co_name}")
     try:
-        connection = sqlite3.connect(database_name)
-
-        connection.commit()
-        connection.close()
-
-    except sqlite3.Error:
-        logger.error("Unable to create database")
-        raise RuntimeError("Database connection error")
-
-def _create_table() -> None:
-    database_name = os.getenv("DB_PATH")
-    logger = AppLogging.get_logger(name=f"{inspect.currentframe().f_code.co_name}")
-    try:
-        connection = sqlite3.connect(database_name)
-        cursor = connection.cursor()
-
-        cursor.execute("""
-            CREATE TABLE users (
-                user_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_name TEXT,
-                user_email TEXT,
-                user_project TEXT,
-                api_token TEXT NULL,
-                api_token_creation DATETIME NULL,
-                api_token_last_used DATETIME NULL
-            )
-        """)
-
-        connection.commit()
-        cursor.close()
-        connection.close()
-
-    except sqlite3.Error:
-        logger.error("Unable to create table")
-        raise RuntimeError("Database connection error")
-
-def _query_token_time(token: str) -> tuple[str, str] | None:
-    database_name = os.getenv("DB_PATH")
-    logger = AppLogging.get_logger(name=f"{inspect.currentframe().f_code.co_name}")
-    try:
-        connection = sqlite3.connect(database_name)
-        cursor = connection.cursor()
-
-        cursor.execute("""
-            SELECT api_token_creation, api_token_last_used
-            FROM users
-            WHERE api_token = ?
-        """, (token,))
-
-        result = cursor.fetchone()
-
-        connection.commit()
-        cursor.close()
-        connection.close()
-
-        return result
-
-    except sqlite3.Error:
-        logger.error("Unable to query token")
-        raise RuntimeError("Database connection error")
-
-def _query_full_user(username: str) -> tuple[int, bytes, str, str, str] | None:
-    database_name = os.getenv("DB_PATH")
-    logger = AppLogging.get_logger(name=f"{inspect.currentframe().f_code.co_name}")
-    try:
-        connection = sqlite3.connect(database_name)
-        cursor = connection.cursor()
-
-        cursor.execute("""
-            SELECT user_id, password, api_token, api_token_creation, api_token_last_used 
-            FROM users
-            WHERE username = ?
-        """, (username,))
-        user_details = cursor.fetchone()
-
-        connection.commit()
-        cursor.close()
-        connection.close()
-
-        return user_details
-    except sqlite3.Error:
-        logger.error("Unable to query full user")
-        raise RuntimeError("Database connection error")
-
-def _query_full_user_redis(token: str) -> tuple[int, str, str, str, str, str, str] | None:
-    database_name = os.getenv("DB_PATH")
-    logger = AppLogging.get_logger(name=f"{inspect.currentframe().f_code.co_name}")
-    try:
-        connection = sqlite3.connect(database_name)
-        cursor = connection.cursor()
-
-        cursor.execute("""
-                SELECT user_id, user_name, user_email, user_project, api_token, api_token_creation, api_token_last_expired 
-                FROM users
-                WHERE api_token = ?
-            """, (token,))
-        user_details = cursor.fetchone()
-
-        connection.commit()
-        cursor.close()
-        connection.close()
-
-        return user_details
-    except sqlite3.Error:
-        logger.error("Unable to query full user")
-        raise RuntimeError("Database connection error")
-
-def _insert_token(token: str, user_id: int, current_time: datetime) -> None:
-    database_name = os.getenv("DB_PATH")
-    logger = AppLogging.get_logger(name=f"{inspect.currentframe().f_code.co_name}")
-    try:
-        connection = sqlite3.connect(database_name)
-        cursor = connection.cursor()
-
-        cursor.execute("""
-            UPDATE users
-            SET api_token = ?, api_token_creation = ?, api_token_last_used = ?
-            WHERE user_id = ?
-        """, (token, current_time, current_time, user_id))
-
-        connection.commit()
-        cursor.close()
-        connection.close()
-
-    except sqlite3.Error:
-        logger.error("Unable to insert token")
-        raise RuntimeError("Database connection error")
-
-def _generate_token(user_id: int, passed_username: str, passed_grant_type: str, current_time: datetime) -> str:
-
-    server_secret = os.getenv("SECRET")
-    extra_bits = secrets.token_bytes(32)
-
-    token_str_build = (f"{user_id}_\n"
-                       f"{passed_username}_\n"
-                       f"{passed_grant_type}_\n"
-                       f"{current_time}_\n"
-                       f"{server_secret}_\n"
-                       f"{extra_bits}")
-
-    token = hashlib.sha256(token_str_build.encode('utf-8')).hexdigest()
-    return token
-
-def _validate_token(token: str) -> tuple[int, str]:
-    logger = AppLogging.get_logger(name=f"{inspect.currentframe().f_code.co_name}")
-
-    db_info = _query_token_time(token)
-    if not db_info:
-        logger.error("Token not found in database")
+        user_data = query_full_user_redis(auth_token)
+    except Exception:
+        logger.error(f"Database error during cache miss lookup: {auth_token}")
         return 401, ""
 
-    token_creation, token_last_used = db_info
-    current_time = datetime.now()
+    if user_data is None:
+        logger.error(f"Token not found in database: {auth_token}")
+        return 403, "Invalid token"
 
-    time_difference_creation = current_time - datetime.strptime(token_creation, "%Y-%m-%d %H:%M:%S.%f")
-    if time_difference_creation > timedelta(minutes=65):
-        logger.info("Token expired after 65 minutes")
-        return 403, "Token Expired."
+    _, _, _, _, _, at_creation, at_used, body_1, body_2 = user_data
 
-    time_difference_last_used = current_time - datetime.strptime(token_last_used, "%Y-%m-%d %H:%M:%S.%f")
-    if time_difference_last_used > timedelta(minutes=5):
-        logger.info("Token expired after 5 minutes")
-        return 403, "Token Expired."
+    if required_body_1 != body_1:
+        return 401, ""
+
+    if required_body_2 != body_2:
+        return 401, ""
+
+    # Gate 1 — 90-day hard expiry
+    creation_date = datetime.strptime(at_creation, "%Y-%m-%d %H:%M:%S.%f")
+    hard_expiration = creation_date + timedelta(days=90)
+    if datetime.now() > hard_expiration:
+        logger.error(f"Token has exceeded 90-day hard expiry: {auth_token}")
+        return 403, "Token has expired"
+
+    # Gate 2 — 12-hour cooldown between sessions
+    if at_used:
+        last_used_time = datetime.strptime(at_used, "%Y-%m-%d %H:%M:%S.%f")
+        last_session = last_used_time + timedelta(hours=12)
+        if datetime.now() < last_session:
+            logger.warning(f"Token is in cooldown: {auth_token}")
+            return 429, "Token is in cooldown"
 
     return 200, ""
 
-def _refresh_token_time(token: str) -> None:
-    database_name = os.getenv("DB_PATH")
+def _handle_non_auth():
     logger = AppLogging.get_logger(name=f"{inspect.currentframe().f_code.co_name}")
 
-    current_time = datetime.now()
+    ip = get_remote_address()
+    ip_key = f"ip-session:{ip}"
+    ip_cache = redis_cache.hgetall(ip_key)
 
-    try:
-        connection = sqlite3.connect(database_name)
-        cursor = connection.cursor()
+    if ip_cache:
+        redis_cache.expire(ip_key, 30 * 60)
+        return 200, ""
+    else:
+        last_used = redis_cache.get(f"ip-cooldown:{ip}")
+        if last_used:
+            last_used_time = datetime.strptime(last_used, "%Y-%m-%d %H:%M:%S.%f")
+            cooldown_ends = last_used_time + timedelta(hours=24)
+            if datetime.now() < cooldown_ends:
+                logger.warning(f"IP is in cooldown: {ip}")
+                return 429, "IP is in cooldown"
 
-        cursor.execute("""
-                UPDATE users
-                SET api_token_last_used = ?
-                WHERE api_token = ?
-            """, (current_time, token))
-
-        connection.commit()
-        cursor.close()
-        connection.close()
-
-    except sqlite3.Error:
-        logger.error("Unable to refresh token")
-        raise RuntimeError("Database connection error")
-
-def _set_redis_cache_values(token: str) -> None:
-    try:
-        _, _, _, _, api_token, api_token_creation, api_token_last_used = _query_full_user_redis(token)
-        redis_cache.hset(f'user-session:{api_token}', mapping={
-            "api_token": api_token,
-            "api_token_creation": api_token_creation,
-            "api_token_last_used": api_token_last_used
+        session_start = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+        projected_expiration = (datetime.now() + timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M:%S.%f")
+        redis_cache.hset(ip_key, mapping={
+            "ip": ip,
+            "session_start": session_start,
         })
-    except Exception:
-        redis_cache.hset('user-session:None', mapping={})
+        redis_cache.expire(ip_key, 30 * 60)
+        redis_cache.set(f"ip-cooldown:{ip}", projected_expiration, ex=24 * 60 * 60 + 30 * 60)
+        return 200, ""
 
 def _validate_request() -> tuple[int, str]:
     headers = request.headers
-    body = request.get_json() or {}
-    path = request.path
-
-    required_body_keys = {"grant_type", "username", "password"}
     logger = AppLogging.get_logger(name=f"{inspect.currentframe().f_code.co_name}")
 
-    if path == r"/get-token":
-        if set(body.keys()) != required_body_keys:
-            logger.error("Request Body does not match structure")
-            return 401, ""
-        if any(not body[field] for field in required_body_keys):
-            logger.error("Request Body has missing/null fields")
-            return 401, ""
-    elif path != r"/get-token":
-        auth = headers.get("Authorization", None)
+    auth = headers.get("Authorization", None)
 
-        cached_info = redis_cache.hgetall(auth)
-        if cached_info:
-            return 200, ""
-        else:
-            _set_redis_cache_values(auth)
+    body = request.get_json() or {}
 
-        if not auth:
-            logger.error("Authorization header is missing")
+    if not body:
+        logger.error("Request body is empty")
+        return 400, "Body cannot be empty"
+
+    if not auth:
+        return _handle_non_auth()
+
+    auth_token = auth.removeprefix("Bearer ")
+    redis_key = f"user-session:{auth_token}"
+
+    campaign_name = body.get("campaign_name", "None").strip()
+    region = body.get("region", "None").strip()
+
+    cached_info = redis_cache.hgetall(redis_key)
+
+    if cached_info:
+        creation_time = datetime.strptime(cached_info.get("api_token_creation"), "%Y-%m-%d %H:%M:%S.%f")
+        hard_expiration = creation_time + timedelta(days=90)
+
+        cached_campaign_name = cached_info.get("campaign_name", "").strip()
+        cached_region = cached_info.get("region", "").strip()
+
+        if campaign_name != cached_campaign_name:
             return 401, ""
 
-        auth_token = auth.removeprefix("Bearer ")
-        status, reason = _validate_token(auth_token)
+        if region != cached_region:
+            return 401, ""
+
+        if datetime.now() > hard_expiration:
+            redis_cache.delete(redis_key)
+            logger.error(f"Token has exceeded hard expiry limit: {auth_token}")
+            return 403, "Token has exceeded hard expiry limit"
+
+        redis_cache.expire(redis_key, 65 * 60)
+        return 200, ""
+
+    else:
+
+        status, reason = _handle_redis_cache_creation(auth_token, campaign_name, region)
         if status != 200:
             return status, reason
 
-        _refresh_token_time(auth_token)
+        # All gates passed — start session
+        projected_expiration = datetime.now() + timedelta(minutes=65)
+        _set_redis_cache_values(auth_token)
+        write_session_expiration(auth_token, projected_expiration)
 
     return 200, ""
 
@@ -527,7 +417,6 @@ def enforce_policy() -> tuple[Response, int] | None:
         r"/generator-2014",
         r"/generator-2024",
         r"/generator-random",
-        r"/get-token",
     }
 
     if request.path not in allowed_paths:
@@ -551,7 +440,7 @@ def generator_2014() -> tuple[Response, int]:
         logger.error("Request body is empty")
         return jsonify(_format_response_error(400, ["Body cannot be empty."])), 400
 
-    status, reason, character_stats = _validate_body(body)
+    status, reason, character_stats = _validate_body(body, "/generator-2014")
 
     if status != 200:
         return jsonify(_format_response_error(status, reason)), status
@@ -561,7 +450,7 @@ def generator_2014() -> tuple[Response, int]:
         logger.error("Character sheet is empty")
         return jsonify(_format_response_error(422, ["Failed to generate character sheets"])), 422
 
-    response = _format_response_character(character_sheet_2014)
+    response = _format_response_character(character_sheet_2014, body)
 
     return jsonify(response), 200
 
@@ -574,7 +463,7 @@ def generator_2024() -> tuple[Response, int]:
         logger.error("Request body is empty")
         return jsonify(_format_response_error(400, ["Body cannot be empty."])), 400
 
-    status, reason, character_stats = _validate_body(body)
+    status, reason, character_stats = _validate_body(body, "/generator-2024")
 
     if status != 200:
         return jsonify(_format_response_error(status, reason)), status
@@ -584,7 +473,7 @@ def generator_2024() -> tuple[Response, int]:
         logger.error("Character sheet is empty")
         return jsonify(_format_response_error(422, ["Failed to generate character sheets"])), 422
 
-    response = _format_response_character(character_sheet_2024)
+    response = _format_response_character(character_sheet_2024, body)
 
     return jsonify(response), 200
 
@@ -597,7 +486,7 @@ def generator_random() -> tuple[Response, int]:
         logger.error("Request body is empty")
         return jsonify(_format_response_error(400, ["Body cannot be empty."])), 400
 
-    status, reason, character_stats = _validate_body(body)
+    status, reason, character_stats = _validate_body(body, "/generator-random")
 
     if status != 200:
         return jsonify(_format_response_error(status, reason)), status
@@ -607,52 +496,9 @@ def generator_random() -> tuple[Response, int]:
         logger.error("Character sheet is empty")
         return jsonify(_format_response_error(422, ["Failed to generate character sheets"])), 422
 
-    response = _format_response_character(character_sheet_random)
+    response = _format_response_character(character_sheet_random, body)
 
     return jsonify(response), 200
-
-@app.route(rule='/get-token', methods=["POST"])
-def get_token() -> tuple[Response, int]:
-    logger = AppLogging.get_logger(name=f"{inspect.currentframe().f_code.co_name}")
-    data = request.get_json() or {}
-
-    if not data:
-        logger.error("Request body is empty")
-        return jsonify(_format_response_error(400, ["Body cannot be empty."])), 400
-
-    passed_username = data.get("username", None)
-    passed_password = data.get("password", None)
-    passed_grant_type = data.get("grant_type", None)
-
-    if not passed_username or not passed_password or not passed_grant_type:
-        logger.error("Request body has missing/null fields")
-        return jsonify(_format_response_error(403, ["Access Denied"])), 403
-
-    current_time = datetime.now()
-
-    user_details = _query_full_user(passed_username)
-    if not user_details:
-        logger.error("User details are not in database")
-        return jsonify(_format_response_error(403, ["Access Denied"])), 403
-
-    user_id, user_pw, _, api_token_creation, _ = user_details
-    if not bcrypt.checkpw(passed_password.encode('utf-8'), user_pw):
-        logger.error("Password does not match")
-        return jsonify(_format_response_error(403, ["Access Denied"])), 403
-
-    if api_token_creation:
-        time_difference_creation = current_time - datetime.strptime(api_token_creation, "%Y-%m-%d %H:%M:%S.%f")
-        if time_difference_creation < timedelta(hours=24):
-            logger.info("Token on 24 hours cooldown")
-            return jsonify(_format_response_error(403, ["Token cooldown active"])), 403
-
-    token = _generate_token(user_id, passed_username, passed_grant_type, current_time)
-    _insert_token(token, user_id, current_time)
-
-    status = 200
-    response = _format_token_response(status, token, current_time)
-
-    return jsonify(response), status
 
 if __name__ == '__main__':
     load_dotenv(find_dotenv())
