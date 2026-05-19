@@ -1,6 +1,6 @@
 # D&D Character Sheet API
 
-A self-hosted Flask API that generates mechanically accurate D&D 5e and 5.5e character sheets on demand, derived from the Systems Reference Document. Built as the server side of a larger portfolio showcase demonstrating full-stack API design, from auth contract to concurrent client consumption to downstream data pipeline.
+A self-hosted Flask API that generates mechanically accurate D&D 5e (2014) and 5.5e (2024) character sheets on demand, derived from the Systems Reference Document. Built as the server side of a larger portfolio showcase demonstrating full-stack API design, from auth contract to concurrent client consumption to downstream data pipeline.
 
 The character sheet generation logic originates from a separate encounter balancing project, where mechanical accuracy is a hard requirement. It serves here as the content layer for the API, producing structured, rule-compliant output rather than arbitrary placeholder data. Spell slots, class features, cantrips, and equipment are accumulated correctly across all 20 levels for each SRD-legal class.
 
@@ -16,11 +16,13 @@ The design is informed by experience on the consuming side of real REST API inte
 
 ## Architecture
 
-**Auth layer:** Token-based authentication with TTL enforcement. Tokens are issued via a dedicated endpoint and must accompany all subsequent requests. There are no exposed paths for user management, no `/admin`, no `/add-user`, nothing of that nature. User provisioning happens directly at the database level, outside the API entirely, which keeps that surface area off the network completely.
+**Auth layer:** Token-based authentication using a Bearer token in the `Authorization` header. Tokens are manually issued by the API owner and stored in a private SQLite database. Authenticated users receive a 65-minute session window, a 6 requests/second rate limit, and a 12-hour cooldown between sessions. Tokens carry a 90-day hard expiry. Unauthenticated users are tracked by IP, receiving a 30-minute session window, a 3 requests/second rate limit, and a 24-hour cooldown after session expiry. There are no exposed paths for user management — provisioning happens directly at the database level, keeping that surface area off the network entirely.
 
 **Request enforcement:** A global `before_request` hook validates every incoming request before any route handler runs. No route is reachable without passing that gate first.
 
-**Response envelope:** All responses follow the JSend specification, consistent structure across success, failure, and error states. See `usage.md` for the full response schema and error code reference.
+**Session and rate limit state:** Redis handles session caching for both authenticated and unauthenticated users. Flask-Limiter is also backed by Redis, ensuring rate limit state is consistent across Gunicorn workers.
+
+**Response envelope:** All responses follow the JSend specification — consistent structure across success, failure, and error states. Rate limit breaches return a `429` via a custom error template. See `usage.md` for the full response schema and error code reference.
 
 **Nginx layer:** An auth check at the nginx level turns away malformed or unauthorized requests before they reach Flask. Configuration included below.
 
@@ -33,27 +35,42 @@ The design is informed by experience on the consuming side of real REST API inte
 - Python with Flask
 - Gunicorn (WSGI server)
 - nginx (reverse proxy with auth check)
+- Redis (session cache and rate limit state)
 - SQLite (local user store)
+- Flask-Limiter
+- AppLogging (personal PyPI package)
+- python-dotenv
 
 ---
 
 ## Endpoints
 
-Four endpoints are implemented and functioning. Full request structure, response shape, and error codes are documented in `usage.md`.
+Three generation endpoints are implemented and functioning, all accepting `POST` requests with a JSON body. Full request structure, response shape, and error codes are documented in `usage.md`.
 
 | Method | Path                | Description                                   |
 |--------|---------------------|-----------------------------------------------|
 | POST   | `/get-token`        | Exchange credentials for a time-limited token |
-| POST   | `/generator-2014`   | Generate Character Sheet for 5e SRD           |
-| POST   | `/generator-2024`   | Generate Character Sheet for 5.5e SRD         |
-| POST   | `/generator-random` | Generate Character Sheet for 5e or 5.5e SRD   |
+| POST   | `/generator-2014`   | Generate character sheet for 5e (2014) SRD    |
+| POST   | `/generator-2024`   | Generate character sheet for 5.5e (2024) SRD  |
+| POST   | `/generator-random` | Generate character sheet for 5e or 5.5e SRD   |
+
+### Request Body Fields
+
+| Field           | Values                          | Description                                              |
+|-----------------|---------------------------------|----------------------------------------------------------|
+| `Edition`       | `5e`, `5.5e`, `random`          | Ruleset to generate against                              |
+| `Class`         | Any SRD class, `random`         | Character class                                          |
+| `Level`         | `0`–`20`                        | Character level (`0` selects randomly)                   |
+| `Quantity`      | `1`–`10`                        | Number of character sheets to generate                   |
+
+The following optional fields are organizational only — they are echoed back in the response as-is and have no effect on generation: `project_name`, `campaign_name`, `region`, `origin`, `sigil`, `codex`, `realm`, `guild`.
 
 ---
 
 ## Nginx Configuration
 
 The following nginx configuration sits in front of the Flask application. The auth check at this layer filters requests before they reach Gunicorn.
-Please see `/config/dnd_api.conf` for a sample Nginx configuration server block.
+Please see `/config/dnd_api.conf` for a sample nginx configuration server block.
 
 ---
 

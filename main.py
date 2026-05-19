@@ -35,7 +35,12 @@ from DND_generators.Classes_2024.Sorcerer import Sorcerer2024
 from DND_generators.Classes_2024.Warlock import Warlock2024
 from DND_generators.Classes_2024.Wizard import Wizard2024
 
-from database_ops.database_helper import query_full_user_redis, write_session_expiration, get_redis_mapping
+from database_ops.database_helper import write_session_expiration
+from redis_ops.redis_helper import (
+    get_redis_mapping,
+    validate_redis_cache_creation,
+    validate_redis_cache
+)
 
 load_dotenv(find_dotenv())
 dnd_log_path = os.getenv("DND_LOG_PATH")
@@ -75,15 +80,27 @@ redis_cache = redis.Redis(host=redis_host, port=redis_port, decode_responses=Tru
 
 def _format_response_character(characters: list[dict], body: dict) -> dict:
 
+    project_name = body.get("project_name", "").strip()
     campaign_name = body.get("campaign_name", "").strip()
     region = body.get("region", "").strip()
+    origin = body.get("origin", "").strip()
+    sigil = body.get("sigil", "").strip()
+    codex = body.get("codex", "").strip()
+    realm = body.get("realm", "").strip()
+    guild = body.get("guild", "").strip()
 
     response = {
         "data": {
             "code": 200,
             "characters": characters,
+            "project_name": project_name,
             "campaign_name": campaign_name,
-            "region": region
+            "region": region,
+            "origin": origin,
+            "sigil": sigil,
+            "codex": codex,
+            "realm": realm,
+            "guild": guild
         },
         "message": f"Generated {len(characters)} characters",
         "status": "success"
@@ -285,44 +302,6 @@ def _set_redis_cache_values(token: str) -> None:
     redis_cache.hset(name=n, mapping=m)
     redis_cache.expire(name=n, time=t)
 
-def _handle_redis_cache_creation(auth_token: str, required_body_1: str, required_body_2: str) -> tuple[int, str]:
-
-    logger = AppLogging.get_logger(name=f"{inspect.currentframe().f_code.co_name}")
-    try:
-        user_data = query_full_user_redis(auth_token)
-    except Exception:
-        logger.error(f"Database error during cache miss lookup: {auth_token}")
-        return 401, ""
-
-    if user_data is None:
-        logger.error(f"Token not found in database: {auth_token}")
-        return 403, "Invalid token"
-
-    _, _, _, _, _, at_creation, at_used, body_1, body_2 = user_data
-
-    if required_body_1 != body_1:
-        return 401, ""
-
-    if required_body_2 != body_2:
-        return 401, ""
-
-    # Gate 1 — 90-day hard expiry
-    creation_date = datetime.strptime(at_creation, "%Y-%m-%d %H:%M:%S.%f")
-    hard_expiration = creation_date + timedelta(days=90)
-    if datetime.now() > hard_expiration:
-        logger.error(f"Token has exceeded 90-day hard expiry: {auth_token}")
-        return 403, "Token has expired"
-
-    # Gate 2 — 12-hour cooldown between sessions
-    if at_used:
-        last_used_time = datetime.strptime(at_used, "%Y-%m-%d %H:%M:%S.%f")
-        last_session = last_used_time + timedelta(hours=12)
-        if datetime.now() < last_session:
-            logger.warning(f"Token is in cooldown: {auth_token}")
-            return 429, "Token is in cooldown"
-
-    return 200, ""
-
 def _handle_non_auth():
     logger = AppLogging.get_logger(name=f"{inspect.currentframe().f_code.co_name}")
 
@@ -370,35 +349,15 @@ def _validate_request() -> tuple[int, str]:
     auth_token = auth.removeprefix("Bearer ")
     redis_key = f"user-session:{auth_token}"
 
-    campaign_name = body.get("campaign_name", "None").strip()
-    region = body.get("region", "None").strip()
-
     cached_info = redis_cache.hgetall(redis_key)
 
     if cached_info:
-        creation_time = datetime.strptime(cached_info.get("api_token_creation"), "%Y-%m-%d %H:%M:%S.%f")
-        hard_expiration = creation_time + timedelta(days=90)
-
-        cached_campaign_name = cached_info.get("campaign_name", "").strip()
-        cached_region = cached_info.get("region", "").strip()
-
-        if campaign_name != cached_campaign_name:
-            return 401, ""
-
-        if region != cached_region:
-            return 401, ""
-
-        if datetime.now() > hard_expiration:
-            redis_cache.delete(redis_key)
-            logger.error(f"Token has exceeded hard expiry limit: {auth_token}")
-            return 403, "Token has exceeded hard expiry limit"
-
-        redis_cache.expire(redis_key, 65 * 60)
-        return 200, ""
+        status, reason = validate_redis_cache(auth, cached_info, body, redis_cache)
+        return status, reason
 
     else:
 
-        status, reason = _handle_redis_cache_creation(auth_token, campaign_name, region)
+        status, reason = validate_redis_cache_creation(auth_token, body)
         if status != 200:
             return status, reason
 
