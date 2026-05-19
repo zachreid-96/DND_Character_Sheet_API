@@ -16,7 +16,7 @@ The design is informed by experience on the consuming side of real REST API inte
 
 ## Architecture
 
-**Auth layer:** Token-based authentication using a Bearer token in the `Authorization` header. Tokens are manually issued by the API owner and stored in a private SQLite database. Authenticated users receive a 65-minute session window, a 6 requests/second rate limit, and a 12-hour cooldown between sessions. Tokens carry a 90-day hard expiry. Unauthenticated users are tracked by IP, receiving a 30-minute session window, a 3 requests/second rate limit, and a 24-hour cooldown after session expiry. There are no exposed paths for user management — provisioning happens directly at the database level, keeping that surface area off the network entirely.
+**Auth layer:** Token-based authentication using a Bearer token in the `Authorization` header. Tokens are manually issued by the API owner and stored in a private SQLite database. Authenticated users receive a 65-minute session window, a 6 requests/second rate limit, and a 12-hour cooldown between sessions. Tokens carry a 90-day hard expiry. Unauthenticated users are tracked by IP, receiving a 30-minute session window, a 3 requests/second rate limit, and a 24-hour cooldown after session expiry. There are no exposed paths for user management, provisioning happens directly at the database level, keeping that surface area off the network entirely.
 
 **Request enforcement:** A global `before_request` hook validates every incoming request before any route handler runs. No route is reachable without passing that gate first.
 
